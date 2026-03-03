@@ -1,77 +1,100 @@
 pipeline {
     agent { label 'backoffice' }
 
-    parameters {
-        string(name: 'ROLLBACK_VERSION', defaultValue: '', description: 'Nome do WAR para rollback (ex: docker-java-app-15.war)')
-    }
-
     environment {
-        APP_NAME = "wildfly-demo"
+        SOURCE_CONTAINER = "buildbox006"
+        TARGET_CONTAINER = "wildfly23"
+        APP_NAME = "app.war"
+        SOURCE_PATH = "/app/target/app.war"
+        TARGET_DEPLOY_PATH = "/opt/jboss/wildfly/standalone/deployments"
         DEPLOY_PATH = "/opt/wildfly/deployments"
         HISTORY_PATH = "/opt/wildfly/history"
+        TARGET_TMP_PATH = "/tmp/app.war"
     }
 
     stages {
 
-        stage('Checkout') {
-            when { expression { params.ROLLBACK_VERSION == '' } }
-            steps {
-                git branch: 'main',
-                    url: 'https://github.com/jaumendes/java-app-on-wildfly-container.git'
-            }
-        }
-
-        stage('Build WAR') {
-            when { expression { params.ROLLBACK_VERSION == '' } }
-            steps {
-                sh '''
-                cd java-app-on-wildfly-container
-                mvn clean package -DskipTests
-                '''
-            }
-        }
-
-        stage('Deploy New Version') {
-            when { expression { params.ROLLBACK_VERSION == '' } }
+        stage('Build (inside buildbox006)') {
             steps {
                 sh """
-                mkdir -p ${HISTORY_PATH}
-
-                # Se existir WAR atual, move para history
-                if [ -f ${DEPLOY_PATH}/${APP_NAME}.war ]; then
-                    mv ${DEPLOY_PATH}/${APP_NAME}.war \
-                       ${HISTORY_PATH}/${APP_NAME}-${BUILD_NUMBER}.war
-                fi
-
-                # Copiar novo WAR
-                cp java-app-on-wildfly-container/target/*.war \
-                   ${DEPLOY_PATH}/${APP_NAME}.war
+                mvn clean package
                 """
             }
         }
 
-        stage('Rollback') {
-            when { expression { params.ROLLBACK_VERSION != '' } }
+        stage('Backup Current Deployment') {
             steps {
                 sh """
-                if [ -f ${HISTORY_PATH}/${params.ROLLBACK_VERSION} ]; then
-                    cp ${HISTORY_PATH}/${params.ROLLBACK_VERSION} \
-                       ${DEPLOY_PATH}/${APP_NAME}.war
-                else
-                    echo "Versão não encontrada!"
-                    exit 1
-                fi
+                docker exec ${TARGET_CONTAINER} bash -c '
+                  if [ -f ${TARGET_DEPLOY_PATH}/${APP_NAME} ]; then
+                    cp ${TARGET_DEPLOY_PATH}/${APP_NAME} \
+                       ${TARGET_DEPLOY_PATH}/${APP_NAME}.bak
+                  fi
+                '
+                """
+            }
+        }
+
+        stage('Copy WAR to WildFly') {
+            steps {
+                sh """
+                docker exec ${SOURCE_CONTAINER} cat ${SOURCE_PATH} | \
+                docker exec -i ${TARGET_CONTAINER} sh -c 'cat > ${TARGET_TMP_PATH}'
+                """
+            }
+        }
+
+        stage('Deploy via WildFly CLI') {
+            steps {
+                sh """
+                docker exec ${TARGET_CONTAINER} \
+                /opt/jboss/wildfly/bin/jboss-cli.sh \
+                --connect \
+                --controller=localhost:9990 \
+                --command="deploy ${TARGET_TMP_PATH} --force"
                 """
             }
         }
 
         stage('Health Check') {
             steps {
-                sh '''
-                sleep 15
-                curl -f http://boostit-lx-02:8088/hello/
-                '''
+                script {
+                    sleep(15)
+                    def status = sh(
+                        script: "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8088/app/hello",
+                        returnStdout: true
+                    ).trim()
+
+                    if (status != "200") {
+                        error("Health check failed!")
+                    }
+                }
             }
+        }
+    }
+
+    post {
+
+        failure {
+            echo "Deploy failed. Starting rollback..."
+
+            sh """
+            docker exec ${TARGET_CONTAINER} \
+            /opt/jboss/wildfly/bin/jboss-cli.sh \
+            --connect \
+            --controller=localhost:9990 \
+            --command="undeploy ${APP_NAME}"
+
+            docker exec ${TARGET_CONTAINER} \
+            /opt/jboss/wildfly/bin/jboss-cli.sh \
+            --connect \
+            --controller=localhost:9990 \
+            --command="deploy ${TARGET_DEPLOY_PATH}/${APP_NAME}.bak --force"
+            """
+        }
+
+        success {
+            echo "Deploy successful!"
         }
     }
 }
