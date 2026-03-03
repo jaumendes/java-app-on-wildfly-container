@@ -1,18 +1,21 @@
 package com.example;
 
 import java.io.IOException;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.annotation.WebServlet;
-import jakarta.servlet.http.*;
+import javax.servlet.ServletException;
+import javax.servlet.annotation.WebServlet;
+import javax.servlet.http.*;
 
 @WebServlet("/hello")
 public class HelloServlet extends HttpServlet {
 
     @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp)
+    protected void doGet(HttpServletRequest request,
+                         HttpServletResponse response)
             throws ServletException, IOException {
 
-        resp.setContentType("text/html");
-        resp.getWriter().println("<h1>Hello from WildFly running in Docker!</h1>");
+        response.setContentType("text/html");
+        response.getWriter().println(
+            "<h1>Aplicação funcionando no WildFly 23 🚀</h1>"
+        );
     }
 }
