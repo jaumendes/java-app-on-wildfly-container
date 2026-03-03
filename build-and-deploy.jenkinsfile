@@ -1,0 +1,77 @@
+pipeline {
+    agent { label 'backoffice' }
+
+    parameters {
+        string(name: 'ROLLBACK_VERSION', defaultValue: '', description: 'Nome do WAR para rollback (ex: docker-java-app-15.war)')
+    }
+
+    environment {
+        APP_NAME = "wildfly-demo"
+        DEPLOY_PATH = "/opt/wildfly/deployments"
+        HISTORY_PATH = "/opt/wildfly/history"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            when { expression { params.ROLLBACK_VERSION == '' } }
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/jaumendes/java-app-on-wildfly-container.git'
+            }
+        }
+
+        stage('Build WAR') {
+            when { expression { params.ROLLBACK_VERSION == '' } }
+            steps {
+                sh '''
+                cd java-app-on-wildfly-container
+                mvn clean package -DskipTests
+                '''
+            }
+        }
+
+        stage('Deploy New Version') {
+            when { expression { params.ROLLBACK_VERSION == '' } }
+            steps {
+                sh """
+                mkdir -p ${HISTORY_PATH}
+
+                # Se existir WAR atual, move para history
+                if [ -f ${DEPLOY_PATH}/${APP_NAME}.war ]; then
+                    mv ${DEPLOY_PATH}/${APP_NAME}.war \
+                       ${HISTORY_PATH}/${APP_NAME}-${BUILD_NUMBER}.war
+                fi
+
+                # Copiar novo WAR
+                cp java-app-on-wildfly-container/target/*.war \
+                   ${DEPLOY_PATH}/${APP_NAME}.war
+                """
+            }
+        }
+
+        stage('Rollback') {
+            when { expression { params.ROLLBACK_VERSION != '' } }
+            steps {
+                sh """
+                if [ -f ${HISTORY_PATH}/${params.ROLLBACK_VERSION} ]; then
+                    cp ${HISTORY_PATH}/${params.ROLLBACK_VERSION} \
+                       ${DEPLOY_PATH}/${APP_NAME}.war
+                else
+                    echo "Versão não encontrada!"
+                    exit 1
+                fi
+                """
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                sh '''
+                sleep 15
+                curl -f http://boostit-lx-02:8088/hello/
+                '''
+            }
+        }
+    }
+}
