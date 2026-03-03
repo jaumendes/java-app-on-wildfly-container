@@ -1,4 +1,4 @@
-wildfly-demo/
+bash```wildfly-demo/
  ├── pom.xml
  └── src/
      └── main/
@@ -6,3 +6,4 @@ wildfly-demo/
          │    └── com/example/HelloServlet.java
          └── webapp/
               └── index.jsp
+´´´
